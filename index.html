@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FlowOS — Gestión de Trabajo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+
+  <!-- ══════════════════════════════
+       ICON SIDEBAR (izquierda)
+  ══════════════════════════════ -->
+  <aside class="icon-sidebar">
+    <div class="icon-logo">
+      <div class="logo-mark">
+        <span class="lm-a"></span><span class="lm-b"></span>
+        <span class="lm-c"></span><span class="lm-d"></span>
+      </div>
+    </div>
+
+    <nav class="icon-nav">
+      <button class="icon-btn" data-section="dashboard" title="Dashboard">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      </button>
+      <button class="icon-btn active" data-section="tareas" title="Tareas">
+        <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12l2 2 4-4"/></svg>
+        <span class="icon-dot" id="icon-dot-tareas"></span>
+      </button>
+      <button class="icon-btn" data-section="proyectos" title="Proyectos">
+        <svg viewBox="0 0 24 24"><path d="M2 7a2 2 0 012-2h4.586a1 1 0 01.707.293L11 7h9a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2V7z"/></svg>
+      </button>
+      <button class="icon-btn" data-section="reportes" title="Reportes">
+        <svg viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+      </button>
+    </nav>
+
+    <div class="icon-sidebar-foot">
+      <button class="icon-btn" data-section="settings" title="Configuración">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      </button>
+      <div class="icon-avatar">JD</div>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════════
+       MAIN WRAPPER
+  ══════════════════════════════ -->
+  <div class="main-wrapper">
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 class="topbar-title" id="topbarTitle">TAREAS</h1>
+        <button class="btn-topbar-add" id="btnTopAdd" title="Nuevo elemento">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <div class="topbar-right">
+        <span class="topbar-date" id="topbarDate"></span>
+        <div class="topbar-avatar-wrap">
+          <div class="topbar-avatar">JD</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- SUB-NAVIGATION TABS -->
+    <nav class="subnav" id="subnav"></nav>
+
+    <!-- VIEW AREA -->
+    <main class="view-area" id="viewArea"></main>
+
+  </div>
+
+  <!-- ══════════════════════════════
+       MODAL
+  ══════════════════════════════ -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span id="modalTitle">Nueva Tarea</span>
+        <button class="modal-close" id="modalClose">
+          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="modalCancel">Cancelar</button>
+        <button class="btn btn-primary" id="modalSave">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
