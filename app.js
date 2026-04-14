@@ -3,14 +3,17 @@
    ============================================================ */
 
 const App = {
-  section: "tareas",   // active icon-sidebar section
-  tab: "board",        // active sub-nav tab
+  section: "tareas",
+  tab: "board",
   drag: null,
-  calOffset: 0,        // week offset from today
-  projFilter: "all",
+  calOffset: 0,
   modalAssignees: [],
-  currentProject: null, // current project ID when in project view
-  projectTab: "planning", // current tab in project view
+  currentProject: null,
+  projectTab: "planning",
+  boardFilter: "mine",
+  resizing: null,
+  dragSource: null,
+  dragFromDate: null,
 };
 
 // ──────────────────────────────────────────────
@@ -45,44 +48,46 @@ function initIconSidebar() {
 
 function showSection(section) {
   App.section = section;
-  App.currentProject = null; // reset project view
-  // Update icon active state
+  App.currentProject = null;
+
   document.querySelectorAll(".icon-btn[data-section]").forEach(b => {
     b.classList.toggle("active", b.dataset.section === section);
   });
-  // Update topbar title
-  const titles = { tareas:"TAREAS", proyectos:"PROYECTOS", dashboard:"DASHBOARD", reportes:"REPORTES", settings:"CONFIGURACIÓN", calendario:"CALENDARIO" };
+
+  const titles = {
+    tareas:"TAREAS", proyectos:"PROYECTOS", dashboard:"DASHBOARD",
+    reportes:"REPORTES", settings:"CONFIGURACIÓN", calendario:"CALENDARIO"
+  };
   document.getElementById("topbarTitle").textContent = titles[section] || section.toUpperCase();
 
-  // Build subnav + default tab
+  // ── Proyectos: sin sub-tabs de estado, solo acciones globales ──
   const subnavConfigs = {
     tareas: [
-      { key:"planning",  label:"Planificación de tareas" },
-      { key:"board",     label:"Tablero de tareas" },
-      { key:"created",   label:"Tareas Creadas" },
-      { key:"realized",  label:"Tareas realizadas" },
-      { key:"myprojects",label:"Mis Proyectos" },
-      { key:"reportes-t",label:"Reportes" },
+      { key:"planning",   label:"Planificación de tareas" },
+      { key:"board",      label:"Tablero de tareas" },
+      { key:"created",    label:"Tareas Creadas" },
+      { key:"realized",   label:"Tareas realizadas" },
+      { key:"myprojects", label:"Mis Proyectos" },
+      { key:"reportes-t", label:"Reportes" },
     ],
+    // Proyectos: vista unificada, sin pestañas de estado
     proyectos: [
-      { key:"proj-all",        label:"Todos" },
-      { key:"proj-pendiente",  label:"Pendiente" },
-      { key:"proj-desarrollo", label:"En Desarrollo" },
-      { key:"proj-qa",         label:"QA / Revisión" },
-      { key:"proj-publicado",  label:"Publicado" },
-      { key:"proj-finalizado", label:"Finalizado" },
-      { key:"proj-descartado", label:"Descartado" },
+      { key:"proj-board",   label:"Tablero de Proyectos" },
+      { key:"myprojects",   label:"Mis Proyectos" },
+      { key:"reportes-t",   label:"Reportes" },
     ],
-    dashboard:  [],
-    reportes:   [],
-    settings:   [],
+    dashboard: [],
+    reportes:  [],
+    settings:  [],
   };
 
   const tabs = subnavConfigs[section] || [];
   buildSubnav(tabs);
 
-  // Default tab per section
-  const defaults = { tareas:"board", proyectos:"proj-all", dashboard:"dash", reportes:"rep", settings:"cfg" };
+  const defaults = {
+    tareas:"board", proyectos:"proj-board",
+    dashboard:"dash", reportes:"rep", settings:"cfg"
+  };
   const def = defaults[section] || (tabs.length ? tabs[0].key : section);
   showTab(def);
 }
@@ -103,45 +108,53 @@ function buildSubnav(tabs) {
 }
 
 function getTabCount(tab) {
-  const m = { panel: DB.myTasks().filter(t=>t.status!=="done").length,
-              board:  DB.myTasks().length,
-              created:DB.createdByMe().length,
-              realized:DB.doneTasks().length,
-              myprojects: DB.projects.filter(p => p.team.includes(DB.meId)).length };
+  const m = {
+    panel:      DB.myTasks().filter(t => t.status !== "done").length,
+    board:      DB.myTasks().length,
+    created:    DB.createdByMe().length,
+    realized:   DB.doneTasks().length,
+    myprojects: DB.projects.filter(p => p.team.includes(DB.meId)).length,
+    "proj-board": DB.projects.length,
+  };
   return m[tab] || 0;
 }
 
 function showTab(tab) {
   App.tab = tab;
-  if (App.currentProject) {
-    App.projectTab = tab;
-  }
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  if (App.currentProject) App.projectTab = tab;
+
+  document.querySelectorAll(".tab-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === tab)
+  );
+
   const view = document.getElementById("viewArea");
   view.innerHTML = "";
+
+  // Vista interna de proyecto
   if (App.currentProject) {
     renderProjectView(App.currentProject, tab);
     return;
   }
+
   const renderers = {
-    panel:      renderPanel,
-    planning:   renderPlanning,
-    board:      () => { App.boardFilter = "mine";    renderBoard("mine"); },
-    created:    () => { App.boardFilter = "created"; renderBoard("created"); },
-    realized:   renderRealized,
-    myprojects: renderMyProjects,
+    panel:        renderPanel,
+    planning:     renderPlanning,
+    board:        () => { App.boardFilter = "mine";    renderBoard("mine"); },
+    created:      () => { App.boardFilter = "created"; renderBoard("created"); },
+    realized:     renderRealized,
+    myprojects:   renderMyProjects,
     "reportes-t": renderReportes,
-    dash:       renderDashboard,
-    rep:        renderReportes,
-    cfg:        renderSettings,
+    "proj-board": renderProjects,         // ← vista unificada de proyectos
+    dash:         renderDashboard,
+    rep:          renderReportes,
+    cfg:          renderSettings,
   };
-  // proyectos tabs
-  if (tab.startsWith("proj-")) { renderProjects(tab.replace("proj-","")); return; }
+
   (renderers[tab] || renderDashboard)();
 }
 
 // ──────────────────────────────────────────────
-// PANEL VIEW — "Mis Tareas (Panel)"
+// PANEL VIEW
 // ──────────────────────────────────────────────
 function renderPanel() {
   const view = document.getElementById("viewArea");
@@ -168,7 +181,6 @@ function renderPanel() {
     const tasks = DB.myTasks().filter(t => t.status === g.key);
     container.innerHTML += buildTaskGroup(g.key, g.label, g.cls, tasks);
   });
-  // Open pending by default
   requestAnimationFrame(() => {
     const firstGroup = container.querySelector(".task-group");
     if (firstGroup) openGroup(firstGroup);
@@ -222,9 +234,7 @@ function buildTaskGroup(key, label, badgeCls, tasks) {
   `;
 }
 
-function openGroup(el) {
-  el.classList.toggle("open");
-}
+function openGroup(el) { el.classList.toggle("open"); }
 
 function toggleTask(id, e) {
   e.stopPropagation();
@@ -235,7 +245,7 @@ function toggleTask(id, e) {
 }
 
 // ──────────────────────────────────────────────
-// PLANNING VIEW — Calendar semanal mejorado
+// PLANNING VIEW
 // ──────────────────────────────────────────────
 function renderPlanning() {
   document.getElementById("viewArea").innerHTML = `
@@ -299,7 +309,7 @@ function buildPlanningPanel() {
       <span class="legend-item"><span style="background:#16a34a" class="legend-dot"></span>Baja</span>
     </div>
     <div class="panel-note" style="font-size:11px;color:var(--txt4);margin-bottom:10px">
-      Puedes arrastrar varias tareas al mismo horario; el calendario las mostrará en columnas paralelas cuando coincidan. Arrastra el borde inferior de cada bloque para extender o reducir su duración.
+      Arrastra tareas al calendario para planificarlas. Arrastra el borde inferior para ajustar duración.
     </div>
     <div class="panel-tasks-list" id="panelTasksList"></div>
   `;
@@ -307,8 +317,7 @@ function buildPlanningPanel() {
   window.planFilterTasks = (q) => { filterQuery = q.toLowerCase(); renderList(); };
 }
 
-// ── Algoritmo anti-solapamiento de eventos ──
-// Devuelve para cada evento: { id, colIdx, colCount }
+// ── Anti-overlap calendar algorithm ──
 function resolveOverlaps(evIds) {
   const events = evIds
     .filter(id => DB.calEventTimes[id] !== undefined)
@@ -321,7 +330,6 @@ function resolveOverlaps(evIds) {
 
   if (!events.length) return {};
 
-  // Agrupar eventos solapados
   const groups = [];
   let currentGroup = [];
   let maxEnd = -Infinity;
@@ -338,10 +346,9 @@ function resolveOverlaps(evIds) {
   }
   if (currentGroup.length) groups.push(currentGroup);
 
-  // Asignar columna interna a cada evento dentro de su grupo
   const result = {};
   for (const group of groups) {
-    const cols = []; // cada col = último end ocupado
+    const cols = [];
     for (const ev of group) {
       let placed = false;
       for (let c = 0; c < cols.length; c++) {
@@ -357,7 +364,6 @@ function resolveOverlaps(evIds) {
         result[ev.id] = { colIdx: cols.length - 1, colCount: group.length };
       }
     }
-    // Actualizar colCount con el número real de columnas usadas
     const totalCols = cols.length;
     for (const ev of group) result[ev.id].colCount = totalCols;
   }
@@ -383,13 +389,12 @@ function buildWeekCalendar(projectId = null) {
   const d0 = days[0], d6 = days[6];
   const rangeFmt = `${d0.getDate()} – ${d6.getDate()} ${months[d6.getMonth()]} ${d6.getFullYear()}`;
 
-  const HOUR_H    = 64;   // px por hora
-  const START_H   = 8;
-  const END_H     = 20;
-  const hours     = Array.from({length: END_H - START_H}, (_,i) => i + START_H);
-  const totalH    = hours.length * HOUR_H;
+  const HOUR_H  = 64;
+  const START_H = 8;
+  const END_H   = 20;
+  const hours   = Array.from({length: END_H - START_H}, (_,i) => i + START_H);
+  const totalH  = hours.length * HOUR_H;
 
-  // Color por estado
   const evColors = {
     pending:  { bg:"#fff7ed", bd:"#fb923c", tx:"#9a3412" },
     doing:    { bg:"#eff6ff", bd:"#3b82f6", tx:"#1e40af" },
@@ -397,7 +402,6 @@ function buildWeekCalendar(projectId = null) {
     wishlist: { bg:"#faf5ff", bd:"#a855f7", tx:"#6b21a8" },
   };
 
-  // ── Cabecera de días ──
   const daysHeader = days.map((d,i) => {
     const isToday = d.toDateString() === today.toDateString();
     return `<div class="cal-day-head ${isToday?"today":""}">
@@ -406,30 +410,24 @@ function buildWeekCalendar(projectId = null) {
     </div>`;
   }).join("");
 
-  // ── Eje de horas ──
   const timesHtml = hours.map(h => `
     <div class="cal-time-slot" style="height:${HOUR_H}px">
       <span class="cal-time-label">${String(h).padStart(2,"0")}:00</span>
     </div>
   `).join("");
 
-  // ── Columnas de días con eventos posicionados absolutamente ──
   const colsHtml = days.map(d => {
     const dateKey = d.toISOString().slice(0,10);
-    let evIds   = DB.calendarEvents[dateKey] || [];
-    if (projectId) {
-      evIds = evIds.filter(id => DB.getTask(id)?.project === projectId);
-    }
-    const layout  = resolveOverlaps(evIds);
+    let evIds = DB.calendarEvents[dateKey] || [];
+    if (projectId) evIds = evIds.filter(id => DB.getTask(id)?.project === projectId);
+    const layout = resolveOverlaps(evIds);
 
-    // Celdas de fondo (drag targets)
     const bgCells = hours.map(h =>
       `<div class="cal-bg-cell" style="height:${HOUR_H}px;top:${(h-START_H)*HOUR_H}px"
             data-date="${dateKey}" data-hour="${h}"
             ondragover="calDragOver(event)" ondrop="calDrop(event,'${dateKey}',${h})"></div>`
     ).join("");
 
-    // Eventos absolutamente posicionados
     const eventsHtml = evIds.map(id => {
       const task = DB.getTask(id);
       if (!task) return "";
@@ -437,17 +435,17 @@ function buildWeekCalendar(projectId = null) {
       if (timeVal === undefined) return "";
       const duration = DB.calEventDurations?.[id] || 1;
 
-      const top     = (timeVal - START_H) * HOUR_H;
-      const height  = Math.max(duration * HOUR_H - 6, 38);
-      const info    = layout[id] || { colIdx:0, colCount:1 };
-      const gap     = 3;
-      const colW    = (100 / info.colCount);
-      const left    = info.colIdx * colW;
-      const width   = colW;
-      const c       = evColors[task.status] || evColors.doing;
-      const proj    = DB.getProject(task.project);
-      const hh      = String(Math.floor(timeVal)).padStart(2,"0");
-      const mm      = String(Math.round((timeVal % 1)*60)).padStart(2,"0");
+      const top    = (timeVal - START_H) * HOUR_H;
+      const height = Math.max(duration * HOUR_H - 6, 38);
+      const info   = layout[id] || { colIdx:0, colCount:1 };
+      const gap    = 3;
+      const colW   = (100 / info.colCount);
+      const left   = info.colIdx * colW;
+      const width  = colW;
+      const c      = evColors[task.status] || evColors.doing;
+      const proj   = DB.getProject(task.project);
+      const hh     = String(Math.floor(timeVal)).padStart(2,"0");
+      const mm     = String(Math.round((timeVal % 1)*60)).padStart(2,"0");
 
       return `<div class="cal-event-abs"
                    style="top:${top+3}px;height:${height}px;
@@ -492,8 +490,8 @@ function buildWeekCalendar(projectId = null) {
   `;
 }
 
-function calNav(dir)    { App.calOffset += dir; buildWeekCalendar(); }
-function calNavToday()  { App.calOffset = 0;    buildWeekCalendar(); }
+function calNav(dir)   { App.calOffset += dir; buildWeekCalendar(); }
+function calNavToday() { App.calOffset = 0;    buildWeekCalendar(); }
 
 function planDragStart(e, id) {
   App.drag = id;
@@ -515,7 +513,6 @@ function calDrop(e, date, hour) {
   e.preventDefault();
   e.currentTarget.classList.remove("drag-over");
   if (!App.drag) return;
-  // Si viene del calendario, remover de la fecha anterior
   if (App.dragSource === "calendar" && App.dragFromDate && App.dragFromDate !== date) {
     const prev = DB.calendarEvents[App.dragFromDate];
     if (prev) DB.calendarEvents[App.dragFromDate] = prev.filter(x => x !== App.drag);
@@ -529,26 +526,28 @@ function calDrop(e, date, hour) {
   buildWeekCalendar();
   buildPlanningPanel();
 }
-document.addEventListener("dragleave", e => { if (e.target.classList) e.target.classList.remove("drag-over"); });
+document.addEventListener("dragleave", e => {
+  if (e.target.classList) e.target.classList.remove("drag-over");
+});
 
 function openCalendarTaskPreview(taskId, event) {
   const task = DB.getTask(taskId);
   if (!task) return;
   closeCalendarTaskPreview();
-  const project = DB.getProject(task.project);
+  const project  = DB.getProject(task.project);
   const assignees = getTaskAssignees(task).map(id => DB.getUser(id)?.name || id).join(", ");
-  const preview = document.createElement('div');
-  preview.id = 'calendarTaskPreview';
-  preview.className = 'calendar-task-preview';
-  const x = Math.min(event.clientX + 12, window.innerWidth - 360);
+  const preview  = document.createElement("div");
+  preview.id = "calendarTaskPreview";
+  preview.className = "calendar-task-preview";
+  const x = Math.min(event.clientX + 12, window.innerWidth  - 360);
   const y = Math.min(event.clientY + 12, window.innerHeight - 260);
   preview.style.left = `${x}px`;
-  preview.style.top = `${y}px`;
+  preview.style.top  = `${y}px`;
   preview.innerHTML = `
     <div class="preview-header">
       <div>
         <div class="preview-title">${task.title}</div>
-        <div class="preview-subtitle">${project ? project.name : 'Sin proyecto'}</div>
+        <div class="preview-subtitle">${project ? project.name : "Sin proyecto"}</div>
       </div>
       <button class="preview-close" onclick="closeCalendarTaskPreview()">×</button>
     </div>
@@ -557,59 +556,58 @@ function openCalendarTaskPreview(taskId, event) {
       <div><strong>Prioridad:</strong> ${task.priority}</div>
       <div><strong>Entrega:</strong> ${fmtDateShort(task.due)}</div>
       <div><strong>Duración:</strong> ${DB.calEventDurations?.[taskId] || 1}h</div>
-      <div><strong>Miembros:</strong> ${assignees || '—'}</div>
-      <div class="preview-desc">${task.description || 'Sin descripción.'}</div>
+      <div><strong>Miembros:</strong> ${assignees || "—"}</div>
+      <div class="preview-desc">${task.description || "Sin descripción."}</div>
       <div style="margin-top:12px;text-align:right;">
-        <button class="btn btn-primary btn-sm" onclick="openTaskModal(null, '${task.project}', '${taskId}')">Editar Tarea</button>
+        <button class="btn btn-primary btn-sm" onclick="openTaskModal(null, '${task.project}', '${task.id}')">Editar Tarea</button>
       </div>
     </div>
   `;
   document.body.appendChild(preview);
-  setTimeout(() => preview.classList.add('visible'), 10);
+  setTimeout(() => preview.classList.add("visible"), 10);
 }
 
 function closeCalendarTaskPreview() {
-  const existing = document.getElementById('calendarTaskPreview');
+  const existing = document.getElementById("calendarTaskPreview");
   if (existing) existing.remove();
 }
 
 function calEventResizeStart(e, id, fromDate) {
   e.preventDefault();
   e.stopPropagation();
-  const el = e.currentTarget.closest('.cal-event-abs');
+  const el = e.currentTarget.closest(".cal-event-abs");
   if (!el) return;
   App.resizing = {
-    id,
-    date: fromDate,
+    id, date: fromDate,
     startY: e.clientY,
     origDuration: DB.calEventDurations?.[id] || 1,
     element: el,
   };
-  document.body.style.cursor = 'ns-resize';
+  document.body.style.cursor = "ns-resize";
 }
 
-document.addEventListener('pointermove', e => {
+document.addEventListener("pointermove", e => {
   if (!App.resizing) return;
   const HOUR_H = 64;
-  const deltaHours = Math.round((e.clientY - App.resizing.startY) / HOUR_H * 2) / 2;
+  const deltaHours  = Math.round((e.clientY - App.resizing.startY) / HOUR_H * 2) / 2;
   const newDuration = Math.max(0.5, App.resizing.origDuration + deltaHours);
   App.resizing.element.style.height = `${Math.max(newDuration * HOUR_H - 6, 38)}px`;
 });
 
-document.addEventListener('pointerup', e => {
+document.addEventListener("pointerup", e => {
   if (!App.resizing) return;
   const HOUR_H = 64;
-  const deltaHours = Math.round((e.clientY - App.resizing.startY) / HOUR_H * 2) / 2;
+  const deltaHours  = Math.round((e.clientY - App.resizing.startY) / HOUR_H * 2) / 2;
   const newDuration = Math.max(0.5, App.resizing.origDuration + deltaHours);
   DB.calEventDurations = DB.calEventDurations || {};
   DB.calEventDurations[App.resizing.id] = newDuration;
   App.resizing = null;
-  document.body.style.cursor = '';
+  document.body.style.cursor = "";
   buildWeekCalendar();
 });
 
 // ──────────────────────────────────────────────
-// BOARD VIEW — Lista tipo panel dentro de columnas
+// BOARD VIEW (Tareas)
 // ──────────────────────────────────────────────
 function renderBoard(filter) {
   const allTasks = filter === "created" ? DB.createdByMe() : DB.myTasks();
@@ -620,8 +618,6 @@ function renderBoard(filter) {
     { key:"done",     label:"DONE",     color:"#22c55e", bg:"#f0fdf4" },
     { key:"wishlist", label:"WISHLIST", color:"#8b5cf6", bg:"#faf5ff" },
   ];
-
-  const title = filter === "created" ? "TAREAS CREADAS" : "MIS TAREAS (BOARD)";
 
   const colsHtml = cols.map(col => {
     const tasks = allTasks.filter(t => t.status === col.key);
@@ -666,9 +662,9 @@ function renderBoard(filter) {
 }
 
 function buildBlistRow(t, accentColor) {
-  const proj    = DB.getProject(t.project);
-  const isOver  = t.due && new Date(t.due) < new Date() && t.status !== "done";
-  const priCfg  = { high:["#fef2f2","#b91c1c"], medium:["#fefce8","#854d0e"], low:["#f0fdf4","#15803d"] };
+  const proj   = DB.getProject(t.project);
+  const isOver = t.due && new Date(t.due) < new Date() && t.status !== "done";
+  const priCfg = { high:["#fef2f2","#b91c1c"], medium:["#fefce8","#854d0e"], low:["#f0fdf4","#15803d"] };
   const [priBg, priC] = priCfg[t.priority] || priCfg.medium;
   return `
     <div class="blist-row" draggable="true" data-id="${t.id}"
@@ -721,11 +717,10 @@ function boardDrop(e, status, filter) {
   e.currentTarget.classList.remove("drag-over");
   document.querySelectorAll(".blist-row.dragging").forEach(el => el.classList.remove("dragging"));
   const t = DB.getTask(App.drag);
-  if (t) { 
-    t.status = status; 
-    if (filter.startsWith('project-')) {
-      const projectId = filter.split('-')[1];
-      renderProjectBoard(projectId);
+  if (t) {
+    t.status = status;
+    if (filter.startsWith("project-")) {
+      renderProjectBoard(filter.split("-")[1]);
     } else {
       renderBoard(filter);
     }
@@ -741,7 +736,7 @@ function boardFilter(e, filter) {
 }
 
 // ──────────────────────────────────────────────
-// TAREAS REALIZADAS — Table
+// TAREAS REALIZADAS
 // ──────────────────────────────────────────────
 function renderRealized() {
   const done = DB.doneTasks();
@@ -749,10 +744,9 @@ function renderRealized() {
   let page = 1;
 
   function render() {
-    const filtered = done;
-    const total = filtered.length;
-    const start = (page-1)*perPage;
-    const slice = filtered.slice(start, start+perPage);
+    const total = done.length;
+    const start = (page - 1) * perPage;
+    const slice = done.slice(start, start + perPage);
 
     const rows = slice.map(t => {
       const proj = DB.getProject(t.project);
@@ -772,7 +766,7 @@ function renderRealized() {
     }).join("");
 
     const totalPages = Math.ceil(total / perPage);
-    const pageNums = Array.from({length:totalPages},(_,i)=>i+1).map(p =>
+    const pageNums = Array.from({length:totalPages}, (_,i) => i + 1).map(p =>
       `<button class="page-btn ${p===page?"active":""}" onclick="realPage(${p})">${p}</button>`
     ).join("");
 
@@ -808,110 +802,250 @@ function renderRealized() {
   render();
 }
 
-// ──────────────────────────────────────────────
-// PROYECTOS VIEW
-// ──────────────────────────────────────────────
-function renderProjects(status) {
-  const projects = status === "all" ? DB.projects : DB.projectsByStatus(status);
-  const badgeMap = { pendiente:"psb-pendiente", desarrollo:"psb-desarrollo", qa:"psb-qa", publicado:"psb-publicado", finalizado:"psb-finalizado", descartado:"psb-descartado" };
-  const labelMap = { pendiente:"Pendiente", desarrollo:"En Desarrollo", qa:"QA / Revisión", publicado:"Publicado", finalizado:"Finalizado", descartado:"Descartado", all:"Todos" };
+// ══════════════════════════════════════════════
+// PROYECTOS — VISTA UNIFICADA (Kanban por estado)
+// ══════════════════════════════════════════════
 
-  const cards = projects.map(p => `
-    <div class="proj-card proj-card-clickable" onclick="renderProjectView('${p.id}')">
-      <div class="proj-card-header">
-        <span class="proj-name">${p.name}</span>
-        <span class="proj-status-badge ${badgeMap[p.status]}">${labelMap[p.status]}</span>
-      </div>
-      <div class="proj-desc">${p.desc}</div>
-      <div class="proj-progress">
-        <div class="proj-prog-meta"><span>Progreso</span><span>${p.progress}%</span></div>
-        <div class="prog-bar"><div class="prog-fill" style="width:${p.progress}%"></div></div>
-      </div>
-      <div class="proj-footer">
-        <div class="proj-team">${p.team.slice(0,4).map(m=>`<div class="proj-avatar">${m}</div>`).join("")}</div>
-        <span class="proj-task-count">${p.tasks} tareas</span>
-      </div>
-    </div>
-  `).join("") || `<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">Sin proyectos</div></div>`;
+/*
+ * Configuración centralizada de estados de proyecto.
+ * Un único punto de verdad: colores, etiquetas, orden de columnas.
+ */
+const PROJ_COLS = [
+  { key:"pendiente",  label:"PENDIENTE",     color:"#f59e0b", bg:"#fff7ed", badgeCls:"psb-pendiente" },
+  { key:"desarrollo", label:"EN DESARROLLO",  color:"#3b82f6", bg:"#eff6ff", badgeCls:"psb-desarrollo" },
+  { key:"qa",         label:"QA / REVISIÓN",  color:"#b45309", bg:"#fff7ed", badgeCls:"psb-qa" },
+  { key:"publicado",  label:"PUBLICADO",      color:"#6366f1", bg:"#eef2ff", badgeCls:"psb-publicado" },
+  { key:"finalizado", label:"FINALIZADO",     color:"#22c55e", bg:"#f0fdf4", badgeCls:"psb-finalizado" },
+  { key:"descartado", label:"DESCARTADO",     color:"#9ca3af", bg:"#f9fafb", badgeCls:"psb-descartado" },
+];
+
+/**
+ * renderProjects()
+ * Vista principal de proyectos: tablero Kanban unificado.
+ * Todos los estados visibles al mismo tiempo, sin pestañas de filtro.
+ */
+function renderProjects() {
+  // Estadísticas globales para el encabezado de la vista
+  const total      = DB.projects.length;
+  const activos    = DB.projects.filter(p => p.status === "desarrollo" || p.status === "qa").length;
+  const finalizados = DB.projects.filter(p => p.status === "finalizado").length;
+
+  // Construir columnas
+  const colsHtml = PROJ_COLS.map(col => {
+    const projects = DB.projectsByStatus(col.key);
+    return buildProjColumn(col, projects);
+  }).join("");
 
   document.getElementById("viewArea").innerHTML = `
-    <div class="projects-view">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <div style="font-size:13px;color:var(--txt3)">${projects.length} proyecto(s) · ${labelMap[status]}</div>
-        <button class="btn btn-primary btn-sm" onclick="openProjectModal()">＋ Nuevo Proyecto</button>
+    <div class="proj-board-view">
+
+      <!-- ── Barra superior ── -->
+      <div class="proj-board-toolbar">
+        <div class="proj-board-stats">
+          <span class="pbs-chip"><strong>${total}</strong> proyectos</span>
+          <span class="pbs-sep">·</span>
+          <span class="pbs-chip pbs-activo"><strong>${activos}</strong> activos</span>
+          <span class="pbs-sep">·</span>
+          <span class="pbs-chip pbs-done"><strong>${finalizados}</strong> finalizados</span>
+        </div>
+        <div class="search-input-wrap" style="max-width:240px">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input class="search-input" placeholder="Buscar proyecto…" id="projSearchInput"
+                 oninput="projBoardFilter(this.value)"/>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openProjectModal()">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Nuevo Proyecto
+        </button>
       </div>
-      <div class="proj-grid">${cards}</div>
+
+      <!-- ── Kanban ── -->
+      <div class="proj-kanban" id="projKanban">
+        ${colsHtml}
+      </div>
+
     </div>
   `;
 }
 
+/**
+ * Construye una columna del Kanban de proyectos.
+ */
+function buildProjColumn(col, projects) {
+  const cardsHtml = projects.length
+    ? projects.map(p => buildProjCard(p, col)).join("")
+    : `<div class="proj-col-empty">
+        <svg viewBox="0 0 24 24" style="width:24px;height:24px;stroke:var(--border2);fill:none;stroke-width:1.5;margin-bottom:6px"><path d="M2 7a2 2 0 012-2h4.586a1 1 0 01.707.293L11 7h9a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2V7z"/></svg>
+        Sin proyectos
+       </div>`;
+
+  return `
+    <div class="proj-col" data-status="${col.key}">
+      <!-- Encabezado de columna -->
+      <div class="proj-col-head" style="border-top:3px solid ${col.color}">
+        <div class="proj-col-title-row">
+          <span class="proj-col-title" style="color:${col.color}">${col.label}</span>
+          <span class="proj-col-badge" style="background:${col.bg};color:${col.color}">${projects.length}</span>
+        </div>
+      </div>
+
+      <!-- Lista de tarjetas -->
+      <div class="proj-col-body" id="projCol-${col.key}">
+        ${cardsHtml}
+      </div>
+
+      <!-- Footer: agregar proyecto -->
+      <div class="proj-col-foot">
+        <button class="blist-add-btn" onclick="openProjectModal()">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Nuevo Proyecto
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Construye la tarjeta de un proyecto dentro de la columna.
+ */
+function buildProjCard(p, col) {
+  const tasksCount = DB.tasks.filter(t => t.project === p.id).length;
+  const done       = DB.tasks.filter(t => t.project === p.id && t.status === "done").length;
+  const teamHtml   = p.team.slice(0, 4).map(m => {
+    const user = DB.getUser(m);
+    return `<div class="proj-avatar proj-avatar-sm" title="${user?.name || m}">${m}</div>`;
+  }).join("");
+
+  // Mini barra de progreso con color de la columna
+  return `
+    <div class="proj-card-k" data-proj-id="${p.id}" onclick="renderProjectView('${p.id}')">
+      <!-- Nombre -->
+      <div class="pck-name">${p.name}</div>
+
+      <!-- Descripción truncada -->
+      <div class="pck-desc">${p.desc.slice(0, 72)}${p.desc.length > 72 ? "…" : ""}</div>
+
+      <!-- Progreso -->
+      <div class="pck-progress">
+        <div class="pck-prog-meta">
+          <span>Progreso</span>
+          <span>${p.progress}%</span>
+        </div>
+        <div class="pck-prog-bar">
+          <div class="pck-prog-fill" style="width:${p.progress}%;background:${col.color}"></div>
+        </div>
+      </div>
+
+      <!-- Footer: equipo + contador de tareas -->
+      <div class="pck-footer">
+        <div class="pck-team">${teamHtml}</div>
+        <div class="pck-meta-right">
+          <svg viewBox="0 0 24 24" style="width:11px;height:11px;stroke:var(--txt4);fill:none;stroke-width:2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+          <span>${done}/${tasksCount}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Filtro de búsqueda en tiempo real para el tablero de proyectos.
+ * Oculta tarjetas cuyo nombre no coincida; muestra/oculta el estado vacío de cada columna.
+ */
+function projBoardFilter(query) {
+  const q = query.toLowerCase().trim();
+  document.querySelectorAll(".proj-card-k").forEach(card => {
+    const name = card.querySelector(".pck-name").textContent.toLowerCase();
+    card.style.display = (!q || name.includes(q)) ? "" : "none";
+  });
+
+  // Mostrar/ocultar placeholder de columna vacía según resultado de búsqueda
+  document.querySelectorAll(".proj-col-body").forEach(col => {
+    const visible = [...col.querySelectorAll(".proj-card-k")].some(c => c.style.display !== "none");
+    let empty = col.querySelector(".proj-col-empty-search");
+    if (!visible && q) {
+      if (!empty) {
+        empty = document.createElement("div");
+        empty.className = "proj-col-empty proj-col-empty-search";
+        empty.textContent = "Sin resultados";
+        col.appendChild(empty);
+      }
+    } else if (empty) {
+      empty.remove();
+    }
+  });
+}
+
+// Exponer globalmente para el input inline
+window.projBoardFilter = projBoardFilter;
+
+// ──────────────────────────────────────────────
+// MIS PROYECTOS
+// ──────────────────────────────────────────────
 function renderMyProjects() {
   const projects = DB.projects.filter(p => p.team.includes(DB.meId));
-  const cards = projects.map(p => {
-    const tasksCount = DB.tasks.filter(t => t.project === p.id).length;
-    return `
-      <div class="proj-card proj-card-clickable" onclick="renderProjectDetails('${p.id}')">
-        <div class="proj-card-header">
-          <span class="proj-name">${p.name}</span>
-          <span class="proj-status-badge ${p.status ? 'psb-' + p.status : ''}">${p.status ? p.status.toUpperCase() : 'N/A'}</span>
-        </div>
-        <div class="proj-desc">${p.desc}</div>
-        <div class="proj-progress">
-          <div class="proj-prog-meta"><span>Progreso</span><span>${p.progress}%</span></div>
-          <div class="prog-bar"><div class="prog-fill" style="width:${p.progress}%"></div></div>
-        </div>
-        <div class="proj-footer">
-          <div class="proj-team">${p.team.slice(0,4).map(m=>`<div class="proj-avatar">${m}</div>`).join("")}</div>
-          <span class="proj-task-count">${tasksCount} tareas</span>
-        </div>
-      </div>
-    `;
-  }).join("") || `<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">No tienes proyectos asignados</div></div>`;
+
+  // Reutilizamos el mismo Kanban pero solo con los proyectos del usuario
+  const colsHtml = PROJ_COLS.map(col => {
+    const colProjects = projects.filter(p => p.status === col.key);
+    return buildProjColumn(col, colProjects);
+  }).join("");
 
   document.getElementById("viewArea").innerHTML = `
-    <div class="projects-view">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <div style="font-size:13px;color:var(--txt3)">${projects.length} proyecto(s) asignados a mí</div>
-        <button class="btn btn-primary btn-sm" onclick="openProjectModal()">＋ Nuevo Proyecto</button>
+    <div class="proj-board-view">
+      <div class="proj-board-toolbar">
+        <div class="proj-board-stats">
+          <span class="pbs-chip"><strong>${projects.length}</strong> proyectos asignados a mí</span>
+        </div>
+        <div class="search-input-wrap" style="max-width:240px">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input class="search-input" placeholder="Buscar proyecto…"
+                 oninput="projBoardFilter(this.value)"/>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openProjectModal()">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Nuevo Proyecto
+        </button>
       </div>
-      <div class="proj-grid">${cards}</div>
+      <div class="proj-kanban">${colsHtml}</div>
     </div>
   `;
 }
 
+// ──────────────────────────────────────────────
+// VISTA INTERNA DE PROYECTO
+// ──────────────────────────────────────────────
 function renderProjectView(projectId, tab = "planning") {
   const project = DB.getProject(projectId);
   if (!project) {
-    document.getElementById("viewArea").innerHTML = `<div style="padding:20px;color:var(--txt3)">Proyecto no encontrado.</div>`;
+    document.getElementById("viewArea").innerHTML =
+      `<div style="padding:20px;color:var(--txt3)">Proyecto no encontrado.</div>`;
     return;
   }
   App.currentProject = projectId;
   App.projectTab = tab;
   document.getElementById("topbarTitle").textContent = project.name.toUpperCase();
 
-  // Build project subnav
   const projectTabs = [
-    { key: "planning", label: "Planificación" },
-    { key: "board", label: "Tablero" },
-    { key: "docs", label: "Documentación" },
-    { key: "user-report", label: "Reporte Usuario" },
-    { key: "project-report", label: "Reporte Proyecto" },
+    { key:"planning",       label:"Planificación" },
+    { key:"board",          label:"Tablero" },
+    { key:"docs",           label:"Documentación" },
+    { key:"user-report",    label:"Reporte Usuario" },
+    { key:"project-report", label:"Reporte Proyecto" },
   ];
   buildSubnav(projectTabs);
 
-  // Render the tab content
   const renderers = {
-    planning: () => renderProjectPlanning(projectId),
-    board: () => renderProjectBoard(projectId),
-    docs: () => renderProjectDocs(projectId),
-    "user-report": () => renderProjectUserReport(projectId),
+    planning:         () => renderProjectPlanning(projectId),
+    board:            () => renderProjectBoard(projectId),
+    docs:             () => renderProjectDocs(projectId),
+    "user-report":    () => renderProjectUserReport(projectId),
     "project-report": () => renderProjectReport(projectId),
   };
   (renderers[tab] || renderers.planning)();
 }
 
 function renderProjectPlanning(projectId) {
-  const project = DB.getProject(projectId);
   document.getElementById("viewArea").innerHTML = `
     <div class="planning-layout">
       <div class="planning-panel" id="planningPanel"></div>
@@ -953,13 +1087,14 @@ function buildProjectPlanningPanel(projectId) {
           </div>
         </div>
       </div>`;
-    }).join("") : `<div style="padding:20px;text-align:center;color:var(--txt4);font-size:12px">Sin tareas disponibles</div>`;
+    }).join("") :
+      `<div style="padding:20px;text-align:center;color:var(--txt4);font-size:12px">Sin tareas disponibles</div>`;
   }
 
   panel.innerHTML = `
     <div class="planning-panel-header">
       <span class="planning-panel-title">Panel de Tareas</span>
-      <span style="font-size:11px;color:var(--txt4)">${DB.tasks.filter(t=>t.project === projectId && t.status!=="done").length} disponibles</span>
+      <span style="font-size:11px;color:var(--txt4)">${DB.tasks.filter(t=>t.project===projectId&&t.status!=="done").length} disponibles</span>
     </div>
     <div class="panel-filter-row">
       <div class="search-input-wrap" style="max-width:100%">
@@ -972,9 +1107,6 @@ function buildProjectPlanningPanel(projectId) {
       <span class="legend-item"><span style="background:#ef4444" class="legend-dot"></span>Alta</span>
       <span class="legend-item"><span style="background:#f59e0b" class="legend-dot"></span>Media</span>
       <span class="legend-item"><span style="background:#16a34a" class="legend-dot"></span>Baja</span>
-    </div>
-    <div class="panel-note" style="font-size:11px;color:var(--txt4);margin-bottom:10px">
-      Puedes arrastrar varias tareas al mismo horario; el calendario las mostrará en columnas paralelas cuando coincidan. Arrastra el borde inferior de cada bloque para extender o reducir su duración.
     </div>
     <div class="panel-tasks-list" id="panelTasksList"></div>
   `;
@@ -1037,12 +1169,14 @@ function renderProjectBoard(projectId) {
 function renderProjectDocs(projectId) {
   const project = DB.getProject(projectId);
   document.getElementById("viewArea").innerHTML = `
-    <div class="project-docs-view">
+    <div class="project-docs-view" style="padding:20px">
       <div style="margin-bottom:20px">
         <h3>Documentación del Proyecto</h3>
-        <p>Registra notas, especificaciones y documentación relevante para el proyecto.</p>
+        <p>Registra notas, especificaciones y documentación relevante.</p>
       </div>
-      <textarea class="form-textarea" id="projectDocsTextarea" placeholder="Escribe la documentación aquí..." style="min-height:400px">${project.docs || ""}</textarea>
+      <textarea class="form-textarea" id="projectDocsTextarea"
+                placeholder="Escribe la documentación aquí..."
+                style="min-height:400px">${project.docs || ""}</textarea>
       <div style="margin-top:16px;text-align:right">
         <button class="btn btn-primary" onclick="saveProjectDocs('${projectId}')">Guardar Documentación</button>
       </div>
@@ -1053,20 +1187,17 @@ function renderProjectDocs(projectId) {
 function saveProjectDocs(projectId) {
   const docs = document.getElementById("projectDocsTextarea").value;
   const project = DB.getProject(projectId);
-  if (project) {
-    project.docs = docs;
-    alert("Documentación guardada.");
-  }
+  if (project) { project.docs = docs; alert("Documentación guardada."); }
 }
 
 function renderProjectUserReport(projectId) {
-  const project = DB.getProject(projectId);
+  const project  = DB.getProject(projectId);
   const teamTasks = DB.tasks.filter(t => t.project === projectId);
   const userStats = project.team.map(userId => {
-    const user = DB.getUser(userId);
-    const userTasks = teamTasks.filter(t => getTaskAssignees(t).includes(userId));
-    const completed = userTasks.filter(t => t.status === "done").length;
-    const total = userTasks.length;
+    const user       = DB.getUser(userId);
+    const userTasks  = teamTasks.filter(t => getTaskAssignees(t).includes(userId));
+    const completed  = userTasks.filter(t => t.status === "done").length;
+    const total      = userTasks.length;
     const totalHours = userTasks.reduce((sum, t) => sum + (t.hours || 0), 0);
     return { user, completed, total, totalHours };
   });
@@ -1081,18 +1212,13 @@ function renderProjectUserReport(projectId) {
   `).join("");
 
   document.getElementById("viewArea").innerHTML = `
-    <div class="project-report-view">
-      <div style="margin-bottom:20px">
-        <h3>Reporte de Usuarios</h3>
-        <p>Desempeño de cada usuario asignado al proyecto.</p>
-      </div>
+    <div style="padding:20px">
+      <h3 style="margin-bottom:8px">Reporte de Usuarios</h3>
+      <p style="color:var(--txt3);font-size:12px;margin-bottom:20px">Desempeño de cada usuario asignado al proyecto.</p>
       <div class="data-table-wrap">
         <table class="data-table">
           <thead><tr>
-            <th>Usuario</th>
-            <th>Tareas Completadas</th>
-            <th>Total Tareas</th>
-            <th>Horas Dedicadas</th>
+            <th>Usuario</th><th>Tareas Completadas</th><th>Total Tareas</th><th>Horas Dedicadas</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -1104,22 +1230,22 @@ function renderProjectUserReport(projectId) {
 function renderProjectReport(projectId) {
   const allTasks = DB.tasks.filter(t => t.project === projectId);
   const statusCounts = {
-    pending: allTasks.filter(t => t.status === "pending").length,
-    doing: allTasks.filter(t => t.status === "doing").length,
-    done: allTasks.filter(t => t.status === "done").length,
+    pending:  allTasks.filter(t => t.status === "pending").length,
+    doing:    allTasks.filter(t => t.status === "doing").length,
+    done:     allTasks.filter(t => t.status === "done").length,
     wishlist: allTasks.filter(t => t.status === "wishlist").length,
   };
 
-  const statColors = { pending:"#f59e0b", doing:"#3b82f6", done:"#22c55e", wishlist:"#8b5cf6" };
   const summaryHtml = `
-    <div style="margin-bottom:20px">
-      <h4>Resumen de Tareas por Estado</h4>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <div style="background:${statColors.pending};color:white;padding:8px 12px;border-radius:6px;font-weight:500;">Pending: ${statusCounts.pending}</div>
-        <div style="background:${statColors.doing};color:white;padding:8px 12px;border-radius:6px;font-weight:500;">Doing: ${statusCounts.doing}</div>
-        <div style="background:${statColors.done};color:white;padding:8px 12px;border-radius:6px;font-weight:500;">Done: ${statusCounts.done}</div>
-        <div style="background:${statColors.wishlist};color:white;padding:8px 12px;border-radius:6px;font-weight:500;">Wishlist: ${statusCounts.wishlist}</div>
-      </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px">
+      ${[
+        ["#f59e0b","Pending",statusCounts.pending],
+        ["#3b82f6","Doing",statusCounts.doing],
+        ["#22c55e","Done",statusCounts.done],
+        ["#8b5cf6","Wishlist",statusCounts.wishlist],
+      ].map(([c,l,n]) =>
+        `<div style="background:${c};color:white;padding:8px 16px;border-radius:8px;font-weight:600;font-size:13px">${l}: ${n}</div>`
+      ).join("")}
     </div>
   `;
 
@@ -1135,19 +1261,14 @@ function renderProjectReport(projectId) {
   }).join("") || `<tr><td colspan="4" style="text-align:center;padding:18px;color:var(--txt4)">No hay tareas finalizadas.</td></tr>`;
 
   document.getElementById("viewArea").innerHTML = `
-    <div class="project-report-view">
-      <div style="margin-bottom:20px">
-        <h3>Reporte del Proyecto</h3>
-        <p>Resumen de tareas y tareas finalizadas en el proyecto.</p>
-      </div>
+    <div style="padding:20px">
+      <h3 style="margin-bottom:8px">Reporte del Proyecto</h3>
+      <p style="color:var(--txt3);font-size:12px;margin-bottom:20px">Resumen de tareas y estado del proyecto.</p>
       ${summaryHtml}
       <div class="data-table-wrap">
         <table class="data-table">
           <thead><tr>
-            <th>Tarea</th>
-            <th>Asignados</th>
-            <th>Fecha de Entrega</th>
-            <th>Prioridad</th>
+            <th>Tarea</th><th>Asignados</th><th>Fecha de Entrega</th><th>Prioridad</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -1160,18 +1281,18 @@ function renderProjectReport(projectId) {
 // DASHBOARD
 // ──────────────────────────────────────────────
 function renderDashboard() {
-  const done = DB.tasks.filter(t=>t.status==="done").length;
-  const doing = DB.tasks.filter(t=>t.status==="doing").length;
-  const pending = DB.tasks.filter(t=>t.status==="pending").length;
-  const wish = DB.tasks.filter(t=>t.status==="wishlist").length;
+  const done    = DB.tasks.filter(t => t.status === "done").length;
+  const doing   = DB.tasks.filter(t => t.status === "doing").length;
+  const pending = DB.tasks.filter(t => t.status === "pending").length;
+  const wish    = DB.tasks.filter(t => t.status === "wishlist").length;
 
   const statsHtml = [
-    { label:"Total Proyectos", val: DB.projects.length, sub:"activos", cls:"dash-stat-accent" },
-    { label:"En Desarrollo",   val: DB.projects.filter(p=>p.status==="desarrollo").length, sub:"proyectos", cls:"dash-stat-blue" },
-    { label:"Tareas Doing",    val: doing,  sub:"en curso", cls:"dash-stat-blue" },
+    { label:"Total Proyectos", val: DB.projects.length,                                         sub:"activos",    cls:"dash-stat-accent" },
+    { label:"En Desarrollo",   val: DB.projects.filter(p=>p.status==="desarrollo").length,      sub:"proyectos",  cls:"dash-stat-blue" },
+    { label:"Tareas Doing",    val: doing,  sub:"en curso",    cls:"dash-stat-blue" },
     { label:"Pendientes",      val: pending, sub:"por atender", cls:"dash-stat-orange" },
     { label:"Completadas",     val: done,   sub:"tareas done", cls:"dash-stat-accent" },
-    { label:"Wishlist",        val: wish,   sub:"ideas", cls:"dash-stat-purple" },
+    { label:"Wishlist",        val: wish,   sub:"ideas",       cls:"dash-stat-purple" },
   ].map(s => `
     <div class="dash-stat ${s.cls}">
       <div class="dash-stat-label">${s.label}</div>
@@ -1190,8 +1311,8 @@ function renderDashboard() {
     </div>
   `).join("");
 
-  const activeProj = DB.projects.filter(p=>p.status==="desarrollo"||p.status==="qa");
-  const progressHtml = activeProj.map(p=>`
+  const activeProj  = DB.projects.filter(p => p.status === "desarrollo" || p.status === "qa");
+  const progressHtml = activeProj.map(p => `
     <div style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--txt3);margin-bottom:4px">
         <span>${p.name}</span><span>${p.progress}%</span>
@@ -1216,11 +1337,11 @@ function renderDashboard() {
 // ──────────────────────────────────────────────
 function renderReportes() {
   const statuses = ["pending","doing","done","wishlist"];
-  const colors = { pending:"#f59e0b", doing:"#3b82f6", done:"#22c55e", wishlist:"#8b5cf6" };
-  const max = Math.max(...statuses.map(s => DB.tasks.filter(t=>t.status===s).length), 1);
+  const colors   = { pending:"#f59e0b", doing:"#3b82f6", done:"#22c55e", wishlist:"#8b5cf6" };
+  const max      = Math.max(...statuses.map(s => DB.tasks.filter(t=>t.status===s).length), 1);
 
   const taskBars = statuses.map(s => {
-    const count = DB.tasks.filter(t=>t.status===s).length;
+    const count = DB.tasks.filter(t => t.status === s).length;
     return `<div class="bar-row">
       <span class="bar-label">${s}</span>
       <div class="bar-track"><div class="bar-fill" style="width:${(count/max*100).toFixed(0)}%;background:${colors[s]}"></div></div>
@@ -1230,9 +1351,9 @@ function renderReportes() {
 
   const projStatuses = ["pendiente","desarrollo","qa","publicado","finalizado","descartado"];
   const pColors = ["#f59e0b","#3b82f6","#f97316","#6366f1","#22c55e","#9ca3af"];
-  const pMax = Math.max(...projStatuses.map(s => DB.projects.filter(p=>p.status===s).length), 1);
+  const pMax    = Math.max(...projStatuses.map(s => DB.projects.filter(p=>p.status===s).length), 1);
   const projBars = projStatuses.map((s,i) => {
-    const count = DB.projects.filter(p=>p.status===s).length;
+    const count = DB.projects.filter(p => p.status === s).length;
     return `<div class="bar-row">
       <span class="bar-label" style="font-size:11px">${s}</span>
       <div class="bar-track"><div class="bar-fill" style="width:${(count/pMax*100).toFixed(0)}%;background:${pColors[i]}"></div></div>
@@ -1256,9 +1377,13 @@ function renderReportes() {
           <div class="report-title">Carga del equipo</div>
           <div class="bar-chart">
             ${DB.users.map(u => {
-              const cnt = DB.tasks.filter(t=>getTaskAssignees(t).includes(u.id)&&t.status!=="done").length;
+              const cnt   = DB.tasks.filter(t=>getTaskAssignees(t).includes(u.id)&&t.status!=="done").length;
               const total = DB.tasks.filter(t=>getTaskAssignees(t).includes(u.id)).length;
-              return `<div class="bar-row"><span class="bar-label">${u.initials}</span><div class="bar-track"><div class="bar-fill" style="width:${total?cnt/total*100:0}%;background:var(--brand)"></div></div><span class="bar-val">${cnt}</span></div>`;
+              return `<div class="bar-row">
+                <span class="bar-label">${u.initials}</span>
+                <div class="bar-track"><div class="bar-fill" style="width:${total?cnt/total*100:0}%;background:var(--brand)"></div></div>
+                <span class="bar-val">${cnt}</span>
+              </div>`;
             }).join("")}
           </div>
         </div>
@@ -1301,56 +1426,58 @@ function renderSettings() {
 // ──────────────────────────────────────────────
 function initModal() {
   const overlay = document.getElementById("modalOverlay");
-  const close = () => overlay.classList.remove("open");
+  const close   = () => overlay.classList.remove("open");
   document.getElementById("modalClose").addEventListener("click", close);
   document.getElementById("modalCancel").addEventListener("click", close);
   overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
 
   document.getElementById("modalSave").addEventListener("click", () => {
-    const body = document.getElementById("modalBody");
+    const body      = document.getElementById("modalBody");
     const nameInput = body.querySelector('[name="name"]');
-    if (!nameInput?.value.trim()) { nameInput.style.borderColor="red"; return; }
-    const type = document.getElementById("modalSave").dataset.type;
+    if (!nameInput?.value.trim()) { nameInput.style.borderColor = "red"; return; }
+
+    const type   = document.getElementById("modalSave").dataset.type;
     const taskId = document.getElementById("modalSave").dataset.taskId;
+
     if (type === "project") {
       DB.projects.push({
-        id: "p"+Date.now(), name: nameInput.value.trim(),
+        id: "p" + Date.now(),
+        name: nameInput.value.trim(),
         desc: body.querySelector('[name="desc"]')?.value || "",
         status: body.querySelector('[name="status"]')?.value || "pendiente",
-        progress: 0, team: ["JD"], tasks: 0, created: new Date().toISOString().slice(0,10)
+        progress: 0, team: ["JD"], tasks: 0,
+        created: new Date().toISOString().slice(0,10),
       });
     } else if (taskId) {
-      // Editar tarea existente
       const task = DB.getTask(taskId);
       if (task) {
-        task.title = nameInput.value.trim();
+        task.title       = nameInput.value.trim();
         task.description = body.querySelector('[name="description"]')?.value || "";
-        task.status = body.querySelector('[name="status"]')?.value || "pending";
-        task.project = body.querySelector('[name="project"]')?.value || "p1";
-        task.priority = body.querySelector('[name="priority"]')?.value || "medium";
-        task.due = body.querySelector('[name="due"]')?.value || "2026-12-31";
-        task.hours = body.querySelector('[name="hours"]')?.value || "";
-        task.attachment = body.querySelector('[name="attachment"]')?.files[0]?.name || task.attachment;
-        task.assignees = App.modalAssignees.length ? App.modalAssignees : [DB.meId];
-        task.assignee = task.assignees[0];
+        task.status      = body.querySelector('[name="status"]')?.value || "pending";
+        task.project     = body.querySelector('[name="project"]')?.value || "p1";
+        task.priority    = body.querySelector('[name="priority"]')?.value || "medium";
+        task.due         = body.querySelector('[name="due"]')?.value || "2026-12-31";
+        task.hours       = body.querySelector('[name="hours"]')?.value || "";
+        task.attachment  = body.querySelector('[name="attachment"]')?.files[0]?.name || task.attachment;
+        task.assignees   = App.modalAssignees.length ? App.modalAssignees : [DB.meId];
+        task.assignee    = task.assignees[0];
       }
     } else {
-      // Nueva tarea
       const assignees = App.modalAssignees.length ? App.modalAssignees : [DB.meId];
       DB.tasks.push({
-        id: "t"+Date.now(), title: nameInput.value.trim(),
+        id: "t" + Date.now(),
+        title:       nameInput.value.trim(),
         description: body.querySelector('[name="description"]')?.value || "",
-        status: body.querySelector('[name="status"]')?.value || "pending",
-        assignee: assignees[0],
+        status:      body.querySelector('[name="status"]')?.value || "pending",
+        assignee:    assignees[0],
         assignees,
-        createdBy: "JD",
-        project: body.querySelector('[name="project"]')?.value || "p1",
-        priority: body.querySelector('[name="priority"]')?.value || "medium",
-        due: body.querySelector('[name="due"]')?.value || "2026-12-31",
-        hours: body.querySelector('[name="hours"]')?.value || "",
-        attachment: body.querySelector('[name="attachment"]')?.files[0]?.name || "",
-        tags: [],
-        mine: true, created: true
+        createdBy:   "JD",
+        project:     body.querySelector('[name="project"]')?.value || "p1",
+        priority:    body.querySelector('[name="priority"]')?.value || "medium",
+        due:         body.querySelector('[name="due"]')?.value || "2026-12-31",
+        hours:       body.querySelector('[name="hours"]')?.value || "",
+        attachment:  body.querySelector('[name="attachment"]')?.files[0]?.name || "",
+        tags: [], mine: true, created: true,
       });
     }
     close();
@@ -1360,43 +1487,63 @@ function initModal() {
 
 function openTaskModal(defaultStatus = "pending", projectId = null, taskId = null) {
   const isEdit = !!taskId;
-  const task = isEdit ? DB.getTask(taskId) : null;
+  const task   = isEdit ? DB.getTask(taskId) : null;
   document.getElementById("modalTitle").textContent = isEdit ? "Editar Tarea" : "Nueva Tarea";
-  document.getElementById("modalSave").dataset.type = "task";
+  document.getElementById("modalSave").dataset.type   = "task";
   document.getElementById("modalSave").dataset.taskId = taskId || "";
-  const projOpts = DB.projects.map(p=>`<option value="${p.id}" ${projectId === p.id || (task && task.project === p.id) ? "selected" : ""}>${p.name}</option>`).join("");
-  const userOpts = DB.users.map(u=>`<option value="${u.id}">${u.name}</option>`).join("");
+
+  const projOpts = DB.projects.map(p =>
+    `<option value="${p.id}" ${projectId === p.id || (task && task.project === p.id) ? "selected" : ""}>${p.name}</option>`
+  ).join("");
+
   document.getElementById("modalBody").innerHTML = `
-    <div class="form-group"><label class="form-label">Título *</label><input class="form-input" name="name" placeholder="Ej. Diseñar pantalla de perfil" value="${task?.title || ""}"/></div>
-    <div class="form-group"><label class="form-label">Descripción</label><textarea class="form-textarea" name="description" placeholder="Describe la tarea">${task?.description || ""}</textarea></div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Proyecto</label><select class="form-select" name="project">${projOpts}</select></div>
-      <div class="form-group"><label class="form-label">Miembros asignados</label><div class="member-chip-list" id="assigneeChipList"></div></div>
+    <div class="form-group"><label class="form-label">Título *</label>
+      <input class="form-input" name="name" placeholder="Ej. Diseñar pantalla de perfil" value="${task?.title || ""}"/>
+    </div>
+    <div class="form-group"><label class="form-label">Descripción</label>
+      <textarea class="form-textarea" name="description" placeholder="Describe la tarea">${task?.description || ""}</textarea>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Fecha de entrega</label><input class="form-input" type="date" name="due" value="${task?.due || ""}"/></div>
-      <div class="form-group"><label class="form-label">Horas a trabajar</label><input class="form-input" type="number" min="0" step="0.5" name="hours" placeholder="Horas" value="${task?.hours || ""}"/></div>
+      <div class="form-group"><label class="form-label">Proyecto</label>
+        <select class="form-select" name="project">${projOpts}</select>
+      </div>
+      <div class="form-group"><label class="form-label">Miembros asignados</label>
+        <div class="member-chip-list" id="assigneeChipList"></div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Fecha de entrega</label>
+        <input class="form-input" type="date" name="due" value="${task?.due || ""}"/>
+      </div>
+      <div class="form-group"><label class="form-label">Horas a trabajar</label>
+        <input class="form-input" type="number" min="0" step="0.5" name="hours" placeholder="Horas" value="${task?.hours || ""}"/>
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Estado</label>
         <select class="form-select" name="status">
-          <option value="pending" ${task?.status === "pending" || (!task && defaultStatus === "pending") ? "selected" : ""}>Pending</option>
-          <option value="doing" ${task?.status === "doing" || (!task && defaultStatus === "doing") ? "selected" : ""}>Doing</option>
-          <option value="done" ${task?.status === "done" || (!task && defaultStatus === "done") ? "selected" : ""}>Done</option>
-          <option value="wishlist" ${task?.status === "wishlist" || (!task && defaultStatus === "wishlist") ? "selected" : ""}>Wishlist</option>
+          <option value="pending"  ${task?.status==="pending"  || (!task && defaultStatus==="pending")  ? "selected":""}>Pending</option>
+          <option value="doing"    ${task?.status==="doing"    || (!task && defaultStatus==="doing")    ? "selected":""}>Doing</option>
+          <option value="done"     ${task?.status==="done"     || (!task && defaultStatus==="done")     ? "selected":""}>Done</option>
+          <option value="wishlist" ${task?.status==="wishlist" || (!task && defaultStatus==="wishlist") ? "selected":""}>Wishlist</option>
         </select>
       </div>
       <div class="form-group"><label class="form-label">Prioridad</label>
         <select class="form-select" name="priority">
-          <option value="high" ${task?.priority === "high" ? "selected" : ""}>Alta</option><option value="medium" ${task?.priority === "medium" || !task ? "selected" : ""}>Media</option><option value="low" ${task?.priority === "low" ? "selected" : ""}>Baja</option>
+          <option value="high"   ${task?.priority==="high"   ? "selected":""}>Alta</option>
+          <option value="medium" ${task?.priority==="medium" || !task ? "selected":""}>Media</option>
+          <option value="low"    ${task?.priority==="low"    ? "selected":""}>Baja</option>
         </select>
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Subir archivo</label><input class="form-input" type="file" name="attachment"/></div>
+    <div class="form-group"><label class="form-label">Subir archivo</label>
+      <input class="form-input" type="file" name="attachment"/>
+    </div>
   `;
+
   App.modalAssignees = task ? [...task.assignees] : [];
   const projectSelect = document.querySelector('[name="project"]');
-  projectSelect.addEventListener('change', () => {
+  projectSelect.addEventListener("change", () => {
     App.modalAssignees = [];
     renderAssigneeChips(projectSelect.value);
   });
@@ -1405,23 +1552,23 @@ function openTaskModal(defaultStatus = "pending", projectId = null, taskId = nul
 }
 
 function renderAssigneeChips(projectId) {
-  const list = document.getElementById('assigneeChipList');
+  const list = document.getElementById("assigneeChipList");
   if (!list) return;
   const project = DB.getProject(projectId);
   const members = project?.team || [];
   list.innerHTML = members.map(id => {
-    const user = DB.getUser(id);
-    const selected = App.modalAssignees.includes(id) ? 'selected' : '';
+    const user     = DB.getUser(id);
+    const selected = App.modalAssignees.includes(id) ? "selected" : "";
     return `<button type="button" class="member-chip ${selected}" data-user-id="${id}">
       <span class="member-chip-key">${user?.initials || id}</span>
       <span class="member-chip-label">${user?.name || id}</span>
     </button>`;
-  }).join('');
-  list.querySelectorAll('.member-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
+  }).join("");
+  list.querySelectorAll(".member-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
       const id = chip.dataset.userId;
-      chip.classList.toggle('selected');
-      if (chip.classList.contains('selected')) {
+      chip.classList.toggle("selected");
+      if (chip.classList.contains("selected")) {
         if (!App.modalAssignees.includes(id)) App.modalAssignees.push(id);
       } else {
         App.modalAssignees = App.modalAssignees.filter(x => x !== id);
@@ -1434,13 +1581,19 @@ function openProjectModal() {
   document.getElementById("modalTitle").textContent = "Nuevo Proyecto";
   document.getElementById("modalSave").dataset.type = "project";
   document.getElementById("modalBody").innerHTML = `
-    <div class="form-group"><label class="form-label">Nombre *</label><input class="form-input" name="name" placeholder="Ej. Portal de clientes v3"/></div>
-    <div class="form-group"><label class="form-label">Descripción</label><textarea class="form-textarea" name="desc" placeholder="¿De qué trata?"></textarea></div>
+    <div class="form-group"><label class="form-label">Nombre *</label>
+      <input class="form-input" name="name" placeholder="Ej. Portal de clientes v3"/>
+    </div>
+    <div class="form-group"><label class="form-label">Descripción</label>
+      <textarea class="form-textarea" name="desc" placeholder="¿De qué trata?"></textarea>
+    </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Estado</label>
+      <div class="form-group"><label class="form-label">Estado inicial</label>
         <select class="form-select" name="status">
-          <option value="pendiente">Pendiente</option><option value="desarrollo">En Desarrollo</option>
-          <option value="qa">QA</option><option value="publicado">Publicado</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="desarrollo">En Desarrollo</option>
+          <option value="qa">QA</option>
+          <option value="publicado">Publicado</option>
         </select>
       </div>
     </div>
