@@ -75,6 +75,7 @@ function showSection(section) {
       { key:"proj-board",   label:"Tablero de Proyectos" },
       { key:"myprojects",   label:"Mis Proyectos" },
       { key:"reportes-t",   label:"Reportes" },
+      { key:"gantt",      label:"Gantt" },
     ],
     dashboard: [],
     reportes:  [],
@@ -148,6 +149,7 @@ function showTab(tab) {
     dash:         renderDashboard,
     rep:          renderReportes,
     cfg:          renderSettings,
+    "gantt": renderGantt,
   };
 
   (renderers[tab] || renderDashboard)();
