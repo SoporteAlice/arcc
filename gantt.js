@@ -525,6 +525,16 @@ function renderGantt() {
           ${bw > 70 ? `<div class="gantt-task-bar-label" style="color:${isCrit ? "#991b1b" : cfg.tx}">${t.title.slice(0, 20)}${t.title.length > 20 ? "…" : ""}</div>` : ""}
           ${isCrit ? `<div class="gantt-critical-badge">CRÍTICA</div>` : ""}
         </div>
+        ${(() => {
+          /* ── ② Línea base (baseline) ── */
+          const bStart = t.baselineStart;
+          const bEnd   = t.baselineDue;
+          if (!bStart || !bEnd) return "";
+          const bx1 = dateToX(bStart);
+          const bx2 = dateToX(bEnd);
+          const bbw = Math.max(bx2 - bx1, 8);
+          return `<div class="gtt-baseline" style="left:${bx1}px;width:${bbw}px" title="Planeado: ${fmtShort(bStart)} → ${fmtShort(bEnd)}"></div>`;
+        })()}
       </div>`;
     }).join("");
 
@@ -698,28 +708,38 @@ function renderGantt() {
           const dx      = ev.clientX - startX;
           const newLeft = Math.max(0, Math.min(origLeft + dx, CHART_W - 20));
           const newDate = xToDate(newLeft);
-
-          /* ── Calcular duración original ── */
-          const task = DB.getTask(tid);
+          const task    = DB.getTask(tid);
           if (!task) return;
 
-          const oldStart = new Date((task.ganttStart || task.created || "2026-01-01") + "T00:00:00");
-          const oldEnd   = new Date((task.due || "2026-09-30") + "T00:00:00");
-          const duration = oldEnd - oldStart; // milisegundos
+          /* ── ③ Feedback de colisión ── */
+          if (checkCollision(task, newDate)) {
+            bar.classList.add("gtt-collision");
+            bar.style.left = origLeft + "px"; // revertir posición
+            setTimeout(() => bar.classList.remove("gtt-collision"), 400);
+            if (dragLabel) dragLabel.style.display = "none";
+            return; // cancelar el movimiento
+          }
 
-          /* ── Actualizar DB (④ sincronización) ── */
+          /* ── Calcular días de diferencia para cascada ── */
+          const oldStartMs  = new Date((task.ganttStart || task.created || "2026-01-01") + "T00:00:00").getTime();
+          const newStartMs  = new Date(newDate + "T00:00:00").getTime();
+          const daysDiff    = Math.round((newStartMs - oldStartMs) / 86400000);
+
+          /* ── Calcular nueva fecha de fin preservando duración ── */
+          const oldEnd = new Date((task.due || "2026-09-30") + "T00:00:00");
+          oldEnd.setDate(oldEnd.getDate() + daysDiff);
+
+          /* ── Actualizar la tarea en DB ── */
           task.ganttStart = newDate;
-          const newEnd = new Date(new Date(newDate + "T00:00:00").getTime() + duration);
-          task.due = newEnd.toISOString().slice(0, 10);
+          task.due        = oldEnd.toISOString().slice(0, 10);
           bar.dataset.origstart = newDate;
+          bar.dataset.x         = newLeft;
 
-          /* Actualizar atributo x */
-          bar.dataset.x = newLeft;
+          /* ── ① Propagar cambios a dependientes ── */
+          propagateChanges(tid, daysDiff);
 
-          /* ── Reconstruir sólo la vista de tareas (sin parpadeo total) ── */
+          /* ── Redibujar y sincronizar ── */
           buildTaskView(projectId);
-
-          /* ── Notificar otros módulos ── */
           syncAllModules();
         }
 
@@ -747,6 +767,36 @@ function renderGantt() {
   /* ════════════════════════════════════════
      HELPERS GLOBALES
   ════════════════════════════════════════ */
+  /* ── ① Cascada de dependencias ── */
+  function propagateChanges(taskId, daysDiff) {
+    DB.tasks
+      .filter(t => t.dependsOn === taskId)
+      .forEach(dependent => {
+        // Desplazar ganttStart
+        const oldStart = new Date((dependent.ganttStart || dependent.created || "2026-01-01") + "T00:00:00");
+        oldStart.setDate(oldStart.getDate() + daysDiff);
+        dependent.ganttStart = oldStart.toISOString().slice(0, 10);
+
+        // Desplazar due conservando duración
+        const oldDue = new Date((dependent.due || "2026-09-30") + "T00:00:00");
+        oldDue.setDate(oldDue.getDate() + daysDiff);
+        dependent.due = oldDue.toISOString().slice(0, 10);
+
+        // Recursión para dependencias en cadena
+        propagateChanges(dependent.id, daysDiff);
+      });
+  }
+
+  /* ── ③ Detección de colisión con predecesora ── */
+  function checkCollision(task, proposedStartDate) {
+    if (!task.dependsOn) return false;
+    const predecessor = DB.getTask(task.dependsOn);
+    if (!predecessor) return false;
+    const predEnd       = new Date((predecessor.due || "2026-09-30") + "T00:00:00");
+    const proposedStart = new Date(proposedStartDate + "T00:00:00");
+    return proposedStart < predEnd; // colisión si la tarea empieza antes de que su predecesora termine
+  }
+
   window.ganttToggleFilter = function(status) {
     if (ganttState.activeFilters.has(status)) ganttState.activeFilters.delete(status);
     else ganttState.activeFilters.add(status);

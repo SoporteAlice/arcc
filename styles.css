@@ -1342,3 +1342,47 @@ body {
 .tag-bug    { background: #fef2f2; color: #b91c1c; }
 .tag-feature{ background: #f0fdf4; color: #15803d; }
 .tag-urgent { background: #fef2f2; color: #991b1b; }
+
+/* ═══════════════════════════════════════════════
+   GANTT v2 — Baseline + Collision
+═══════════════════════════════════════════════ */
+
+/* Barra de línea base (planeado original) */
+.gtt-baseline {
+  position: absolute;
+  height: 5px;
+  bottom: 3px;
+  border-radius: 3px;
+  background: #94a3b8;
+  opacity: 0.55;
+  z-index: 1;
+  pointer-events: none;
+  transition: left .2s ease, width .2s ease;
+}
+.gtt-baseline::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+    #64748b 0px, #64748b 4px,
+    transparent 4px, transparent 8px
+  );
+  opacity: .7;
+}
+
+/* Feedback de colisión de dependencia */
+.gtt-collision {
+  animation: gantt-shake .35s ease both !important;
+  border-left-color: #ef4444 !important;
+  box-shadow: 0 0 0 2px #fca5a5, 0 0 12px rgba(239,68,68,.25) !important;
+}
+@keyframes gantt-shake {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(-4px); }
+  40%  { transform: translateX(4px); }
+  60%  { transform: translateX(-3px); }
+  80%  { transform: translateX(3px); }
+  100% { transform: translateX(0); }
+}
